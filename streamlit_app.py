@@ -343,12 +343,6 @@ elif page == "Change Password":
                     if not is_valid:
                         st.error(f"Password does not meet requirements: {feedback}")
                     else:
-                        # This endpoint is not in the original API but would be a good addition
-                        # For now, we'll show a message that this feature is coming soon
-                        st.info("Password change functionality is coming soon!")
-                        
-                        # If the API had this endpoint, it would look something like:
-                        """
                         try:
                             response = requests.post(
                                 f"{FASTAPI_URL}/change-password",
@@ -368,6 +362,7 @@ elif page == "Change Password":
                                 st.session_state["token_expiry"] = None
                                 st.session_state["logged_in"] = False
                                 st.session_state["user_email"] = None
+                                st.info("You have been logged out. Please log in again with your new password.")
                                 st.experimental_rerun()
                             else:
                                 error_detail = "Failed to change password"
@@ -380,7 +375,6 @@ elif page == "Change Password":
                                 st.error(f"Password change failed: {error_detail}")
                         except requests.exceptions.RequestException as e:
                             st.error(f"Connection error: {str(e)}")
-                        """
     else:
         st.error("Your session has expired. Please log in again.")
         st.session_state["logged_in"] = False

@@ -15,13 +15,14 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.db.database import get_db
-from app.models import User, Tenant, UserRole, ActivityType
+from app.models import User, Tenant, UserRole, ActivityType, TenantStatus
 from app.schemas import (
     UserRegister, 
     TokenResponse, 
     PasswordResetRequest, 
     PasswordResetVerify, 
-    PasswordReset, 
+    PasswordReset,
+    PasswordChangeRequest,
     RefreshTokenRequest
 )
 from app.dependencies import (
@@ -263,9 +264,24 @@ def refresh_access_token(
             "token_type": "bearer"
         }
     except HTTPException:
+        # Re-raise HTTP exceptions with their original status codes and details
         raise
+    except JWTError as e:
+        # Handle JWT-specific errors
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Error refreshing token")
+        # Log the specific error for debugging
+        import logging
+        logging.error(f"Error refreshing token: {str(e)}")
+        # Return a more specific error message
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Error refreshing token: {str(e)}"
+        )
 
 
 @router.post("/reset-password/request")
@@ -457,6 +473,59 @@ def reset_password(
     db.commit()
     
     return {"message": "Password has been reset successfully"}
+
+
+@router.post("/change-password")
+def change_password(
+    password_data: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    request: Request = None
+):
+    """
+    Change user's password.
+    
+    Args:
+        password_data: Password change data with current and new password
+        current_user: Current authenticated user
+        db: Database session
+        request: FastAPI request object
+        
+    Returns:
+        dict: Success message
+    """
+    from app.models import RefreshToken
+    
+    # Verify current password
+    if not verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    # Validate new password
+    validate_password(password_data.new_password)
+    
+    # Check that new password is different from current
+    if verify_password(password_data.new_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+    
+    # Update user's password
+    current_user.password_hash = hash_password(password_data.new_password)
+    
+    # Record password change activity
+    record_user_activity(
+        db=db,
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        activity_type=ActivityType.PASSWORD_CHANGE.value,
+        request=request,
+        details="Password changed"
+    )
+    
+    # Revoke all refresh tokens for this user
+    db.query(RefreshToken).filter(RefreshToken.user_id == current_user.id).update({"revoked": True})
+    
+    db.commit()
+    
+    return {"message": "Password has been changed successfully"}
 
 
 @router.post("/logout")

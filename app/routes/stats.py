@@ -4,7 +4,7 @@ Statistics routes for the SaaS Platform.
 This module contains the API routes for usage statistics and analytics.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 from typing import Optional
@@ -38,13 +38,15 @@ router = APIRouter(
 
 @router.get("/mau", response_model=MonthlyActiveUsersResponse)
 def get_monthly_active_users(
+    tenant_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),  # Use the get_current_user dependency
     db: Session = Depends(get_db)
 ):
     """
-    Get Monthly Active Users statistics for the current tenant.
+    Get Monthly Active Users statistics for the current tenant or a specific tenant for super admins.
     
     Args:
+        tenant_id: Optional tenant ID (for super admins only)
         current_user: Current authenticated user (must be admin or super admin)
         db: Database session
         
@@ -55,11 +57,26 @@ def get_monthly_active_users(
     if current_user.role not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
         raise HTTPException(status_code=403, detail="Access forbidden")
     
-    # For super admin, allow specifying tenant_id as query parameter
-    tenant_id = current_user.tenant_id
+    # Determine which tenant to use
+    if tenant_id is not None:
+        # Only super admins can specify a different tenant_id
+        if current_user.role != UserRole.SUPER_ADMIN.value:
+            raise HTTPException(status_code=403, detail="Only super admins can access other tenant data")
+        
+        # Verify tenant exists
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+            
+        # Use the specified tenant_id
+        target_tenant_id = tenant_id
+    else:
+        # Use the current user's tenant_id
+        target_tenant_id = current_user.tenant_id
     
+    # Query MAU statistics
     mau_stats = db.query(MonthlyActiveUsers).filter(
-        MonthlyActiveUsers.tenant_id == tenant_id
+        MonthlyActiveUsers.tenant_id == target_tenant_id
     ).order_by(
         MonthlyActiveUsers.year.desc(),
         MonthlyActiveUsers.month.desc()
@@ -82,16 +99,19 @@ def get_usage_statistics(
     activity_type: str = None,
     year: int = None,
     month: int = None,
+    tenant_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),  # Use the get_current_user dependency
     db: Session = Depends(get_db)
 ):
     """
-    Get usage statistics filtered by activity type, year, and month for the current tenant.
+    Get usage statistics filtered by activity type, year, and month for the current tenant
+    or a specific tenant for super admins.
     
     Args:
         activity_type: Type of activity to filter by
         year: Year to filter by
         month: Month to filter by
+        tenant_id: Optional tenant ID (for super admins only)
         current_user: Current authenticated user (must be admin or super admin)
         db: Database session
         
@@ -102,10 +122,25 @@ def get_usage_statistics(
     if current_user.role not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
         raise HTTPException(status_code=403, detail="Access forbidden")
     
-    # For super admin, allow specifying tenant_id as query parameter
-    tenant_id = current_user.tenant_id
+    # Determine which tenant to use
+    if tenant_id is not None:
+        # Only super admins can specify a different tenant_id
+        if current_user.role != UserRole.SUPER_ADMIN.value:
+            raise HTTPException(status_code=403, detail="Only super admins can access other tenant data")
+        
+        # Verify tenant exists
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+            
+        # Use the specified tenant_id
+        target_tenant_id = tenant_id
+    else:
+        # Use the current user's tenant_id
+        target_tenant_id = current_user.tenant_id
     
-    query = db.query(UsageSummary).filter(UsageSummary.tenant_id == tenant_id)
+    # Build query
+    query = db.query(UsageSummary).filter(UsageSummary.tenant_id == target_tenant_id)
     
     # Apply filters
     if activity_type:
@@ -143,15 +178,17 @@ def get_usage_statistics(
 def get_user_activity(
     user_id: int,
     limit: int = 50,
+    tenant_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),  # Use the get_current_user dependency
     db: Session = Depends(get_db)
 ):
     """
-    Get activity history for a specific user in the current tenant.
+    Get activity history for a specific user in the current tenant or a specific tenant for super admins.
     
     Args:
         user_id: User ID
         limit: Maximum number of activities to return
+        tenant_id: Optional tenant ID (for super admins only)
         current_user: Current authenticated user (must be admin or super admin)
         db: Database session
         
@@ -162,13 +199,27 @@ def get_user_activity(
     if current_user.role not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
         raise HTTPException(status_code=403, detail="Access forbidden")
     
-    # For super admin, allow specifying tenant_id as query parameter
-    tenant_id = current_user.tenant_id
+    # Determine which tenant to use
+    if tenant_id is not None:
+        # Only super admins can specify a different tenant_id
+        if current_user.role != UserRole.SUPER_ADMIN.value:
+            raise HTTPException(status_code=403, detail="Only super admins can access other tenant data")
+        
+        # Verify tenant exists
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+            
+        # Use the specified tenant_id
+        target_tenant_id = tenant_id
+    else:
+        # Use the current user's tenant_id
+        target_tenant_id = current_user.tenant_id
     
     # Check if user exists and belongs to the tenant
     user = db.query(User).filter(
         User.id == user_id,
-        User.tenant_id == tenant_id
+        User.tenant_id == target_tenant_id
     ).first()
     
     if not user:
@@ -177,7 +228,7 @@ def get_user_activity(
     # Get user activities
     activities = db.query(UserActivity).filter(
         UserActivity.user_id == user_id,
-        UserActivity.tenant_id == tenant_id
+        UserActivity.tenant_id == target_tenant_id
     ).order_by(UserActivity.timestamp.desc()).limit(limit).all()
     
     result = []
